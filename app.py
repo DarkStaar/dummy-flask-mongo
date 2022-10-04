@@ -7,8 +7,9 @@ from bson.json_util import dumps
 from bson.objectid import ObjectId
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-
-import models
+from dateutil import parser
+import random
+import pandas as pd
 
 app = Flask(__name__)
 
@@ -145,7 +146,7 @@ def getStats(username, day):
                 _office_cnt += 1
             elif _weekday.get("present") == "home":
                 _home_cnt += 1
-            elif _weekday.get("present") == "false":
+            elif _weekday.get("present") == "absent":
                 _absent_cnt += 1
             else:
                 _weekend_cnt += 1
@@ -157,6 +158,65 @@ def getStats(username, day):
 
     return jsonify({"Office": officePerc, "Home": homePerc, "Absent": absentPerc, "Weekend": weekendPerc})
 
+@app.route("/user/<username>/tracker/<day>/meetings", methods=['GET'])
+def getBusyPercentage(username, day):
+    _hour = request.json["hour"]
+
+    calendarColl = db.calendar.find({"user": username})
+    if calendarColl is None:
+        return jsonify("Calendar is empty for this user")
+    _record = list()
+    _meetingCnt = 0
+    _dayCnt = 0
+    for record in calendarColl:
+        _record.append({"start": record["record"].get("start"), "end": record["record"].get("end")})
+        _startTime = parser.parse(record["record"].get("start").get("dateTime"))
+        _endTime = parser.parse(record["record"].get("end").get("dateTime"))
+        _day = _startTime.strftime('%A').lower()
+        if day == _day:
+            _dayCnt += 1
+            if _hour >= _startTime.hour and _hour <= _endTime.hour and day == _day:
+                _meetingCnt += 1
+
+    _meetPerc = (_meetingCnt / _dayCnt) * 100
+
+    return jsonify({"Meeting percentage": _meetPerc, "Number of days": _dayCnt, "Meetings": _meetingCnt})
+
+@app.route('/populate/attendance', methods=['GET'])
+def populateAttendance():
+    days = pd.date_range(end = datetime.today(), periods=276).to_pydatetime().tolist()
+    _attendance = list()
+    for day in days:
+        _present = random.randint(1, 3)
+        _presencestr = ""
+        if _present == 1:
+            _presencestr = "office"
+        elif _present == 2:
+            _presencestr = "home"
+        elif _present == 3:
+            _presencestr = "absent"
+        _attendance.append({"day": day, "present": _presencestr})
+
+    db.attendance.insert_one({"user": "fulluser", "attendance": _attendance})
+    return jsonify("User attendance imported")
+
+@app.route('/populate/calendar', methods=['GET'])
+def populateCalendar():
+    _user = "fulluser"
+    _subject = "Testing Subject Mass Input"
+    _timezone = "UTC"
+    for i in range(0, 200):
+        _hours = random.randint(0, 21)
+        _day = random.randint(1, 28)
+        _month = random.randint(1, 9)
+
+        _startdate = datetime(2022, _month, _day, _hours, 0, 0, 0, None)
+        _enddate = datetime(2022, _month, _day, _hours + 2, 0, 0, 0, None)
+
+
+        db.calendar.insert_one({"user": _user, "subject": _subject, "record": {"start": {"dateTime": _startdate.isoformat(), "timeZone": _timezone}, "end": {"dateTime": _enddate.isoformat(), "timeZone": _timezone}}})
+
+    return jsonify("Calendar has been populated")
 
 @app.errorhandler(404)
 def not_found(error=None):
